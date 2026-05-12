@@ -1,0 +1,74 @@
+schema {
+  query: Query
+  mutation: Mutation
+}
+
+type Query {
+  getPost(postId: ID!): Post
+  getComment(commentId: ID!): Comment
+  getFollowers(userId: ID!, limit: Int!, nextToken: String): ProfilesPage!
+  getFollowing(userId: ID!, limit: Int!, nextToken: String): ProfilesPage!
+}
+
+type Mutation {
+  createPost(text: String!): Post!
+  comment(postId: ID!, text: String!): Comment!
+  like(postId: ID!): Boolean!
+  unlike(postId: ID!): Boolean!
+  follow(userId: ID!): Boolean!
+  unfollow(userId: ID!): Boolean!
+  reactComment(commentId: ID!, reaction: CommentReactionType!): Boolean!
+  deletePost(postId: ID!): Boolean!
+  deleteComment(commentId: ID!): Boolean!
+}
+
+enum CommentReactionType {
+  NONE
+  LIKED
+  DISLIKED
+}
+
+enum PostStatusType {
+  PUBLIC
+  DELETED
+}
+
+type UserProfile {
+  id: ID!
+  displayId: String
+  followersCount: Int
+  followingCount: Int
+  postsCount: Int
+  postLikeSent: Int
+  postLikeRecv: Int
+  commentsCount: Int
+  commentLikeSent: Int
+  commentLikeRecv: Int
+  commentDislikeSent: Int
+  commentDislikeRecv: Int
+}
+
+type Post {
+  id: ID!
+  creator: ID!
+  text: String!
+  status: PostStatusType!
+  likes: Int!
+  comments: Int!
+  createdAt: AWSDateTime!
+}
+
+type Comment {
+  id: ID!
+  inCommentToPost: ID!
+  creator: ID!
+  text: String!
+  likes: Int!
+  dislikes: Int!
+  createdAt: AWSDateTime!
+}
+
+type ProfilesPage {
+  profiles: [UserProfile!]!
+  nextToken: String
+}

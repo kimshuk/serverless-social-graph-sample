@@ -1,0 +1,285 @@
+service: serverless-social-graph-sample
+
+frameworkVersion: "3"
+
+plugins:
+  - serverless-plugin-typescript
+  - serverless-appsync-plugin
+  - serverless-iam-roles-per-function
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  architecture: arm64
+  region: ${opt:region, 'us-west-1'}
+  stage: ${opt:stage, 'dev'}
+  logRetentionInDays: 7
+  environment:
+    USERS_TABLE: !Ref UsersTable
+    POSTS_TABLE: !Ref PostsTable
+    COMMENTS_TABLE: !Ref CommentsTable
+
+functions:
+  createPost:
+    handler: src/functions/createPost.handler
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:TransactWriteItems
+        Resource:
+          - !GetAtt UsersTable.Arn
+          - !GetAtt PostsTable.Arn
+
+  comment:
+    handler: src/functions/comment.handler
+    iamRoleStatements:
+      - Effect: Allow
+        Action: dynamodb:TransactWriteItems
+        Resource:
+          - !GetAtt UsersTable.Arn
+          - !GetAtt PostsTable.Arn
+          - !GetAtt CommentsTable.Arn
+
+appSync:
+  name: social-graph-sample-api
+  schema: src/graphql/schema.graphql
+  authentication:
+    type: AMAZON_COGNITO_USER_POOLS
+    config:
+      awsRegion: ${aws:region}
+      userPoolId: !Ref UserPool
+      defaultAction: ALLOW
+  dataSources:
+    usersTable:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref UsersTable
+    postsTable:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref PostsTable
+    commentsTable:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref CommentsTable
+    relationshipsMutation:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref RelationshipsTable
+        substitutions:
+          RelationshipsTable: !Ref RelationshipsTable
+          UsersTable: !Ref UsersTable
+    postReactionMutation:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref LikesTable
+        substitutions:
+          LikesTable: !Ref LikesTable
+          PostsTable: !Ref PostsTable
+          UsersTable: !Ref UsersTable
+    commentReactionMutation:
+      type: AMAZON_DYNAMODB
+      config:
+        tableName: !Ref CommentReactionsTable
+        substitutions:
+          CommentReactionsTable: !Ref CommentReactionsTable
+          CommentsTable: !Ref CommentsTable
+          UsersTable: !Ref UsersTable
+    createPostFunction:
+      type: AWS_LAMBDA
+      config:
+        functionName: createPost
+    commentFunction:
+      type: AWS_LAMBDA
+      config:
+        functionName: comment
+  pipelineFunctions:
+    getPost:
+      dataSource: postsTable
+      code: src/resolvers/pipeline/GetPost.js
+    getComment:
+      dataSource: commentsTable
+      code: src/resolvers/pipeline/GetComment.js
+    getCommentReaction:
+      dataSource: commentReactionMutation
+      code: src/resolvers/pipeline/GetCommentReaction.js
+    setCommentReaction:
+      dataSource: commentReactionMutation
+      code: src/resolvers/pipeline/SetCommentReaction.js
+    removePostAndUpdateUserCounter:
+      dataSource: postReactionMutation
+      code: src/resolvers/pipeline/RemovePostAndUpdateUserCounter.js
+    removeCommentAndUpdateUserCounter:
+      dataSource: commentReactionMutation
+      code: src/resolvers/pipeline/RemoveCommentAndUpdateUserCounter.js
+  resolvers:
+    Query.getPost:
+      functions:
+        - getPost
+    Query.getComment:
+      functions:
+        - getComment
+    Query.getFollowers:
+      functions:
+        - dataSource: relationshipsMutation
+          code: src/resolvers/Query.getFollowers.js
+    Query.getFollowing:
+      functions:
+        - dataSource: relationshipsMutation
+          code: src/resolvers/Query.getFollowing.js
+    Mutation.createPost:
+      dataSource: createPostFunction
+      kind: UNIT
+    Mutation.comment:
+      dataSource: commentFunction
+      kind: UNIT
+    Mutation.like:
+      functions:
+        - getPost
+        - dataSource: postReactionMutation
+          code: src/resolvers/Mutation.like.js
+    Mutation.unlike:
+      functions:
+        - getPost
+        - dataSource: postReactionMutation
+          code: src/resolvers/Mutation.unlike.js
+    Mutation.follow:
+      functions:
+        - dataSource: relationshipsMutation
+          code: src/resolvers/Mutation.follow.js
+    Mutation.unfollow:
+      functions:
+        - dataSource: relationshipsMutation
+          code: src/resolvers/Mutation.unfollow.js
+    Mutation.reactComment:
+      functions:
+        - getComment
+        - getCommentReaction
+        - setCommentReaction
+    Mutation.deletePost:
+      functions:
+        - getPost
+        - removePostAndUpdateUserCounter
+    Mutation.deleteComment:
+      functions:
+        - getComment
+        - removeCommentAndUpdateUserCounter
+
+resources:
+  Resources:
+    UserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ${self:service}-${sls:stage}-users
+        AutoVerifiedAttributes:
+          - email
+
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+    PostsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: creator
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: byCreator
+            KeySchema:
+              - AttributeName: creator
+                KeyType: HASH
+              - AttributeName: id
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    CommentsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: inCommentToPost
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: byPostId
+            KeySchema:
+              - AttributeName: inCommentToPost
+                KeyType: HASH
+              - AttributeName: id
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    LikesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: postId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: postId
+            KeyType: RANGE
+
+    RelationshipsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: sk
+            AttributeType: S
+          - AttributeName: otherUserId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: sk
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: byOtherUser
+            KeySchema:
+              - AttributeName: otherUserId
+                KeyType: HASH
+              - AttributeName: sk
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    CommentReactionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: commentId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: commentId
+            KeyType: RANGE
