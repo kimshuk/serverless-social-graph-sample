@@ -16,21 +16,7 @@
 
 ## 아키텍처
 
-```text
-Client
-  |
-  | GraphQL mutation
-  v
-AWS AppSync
-  |
-  +--> AppSync JS resolver: like / unlike / follow / unfollow / reactComment / delete*
-  |      |
-  |      +--> DynamoDB TransactWriteItems
-  |
-  +--> Lambda resolver: createPost / comment
-         |
-         +--> DynamoDB TransactWriteItems
-```
+![Serverless Social Graph Architecture](docs/assets/social_graph_architecture.svg)
 
 원본 프로젝트에서 사용했던 방식처럼, 단순한 social graph mutation은 AppSync JS resolver의 `TransactWriteItems`를 사용하고, 게시글/댓글 생성처럼 서버에서 ID 생성과 여러 테이블 orchestration이 필요한 작업은 Lambda resolver로 분리했습니다.
 
